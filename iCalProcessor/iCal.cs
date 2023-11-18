@@ -1,14 +1,12 @@
 using System.Net;
-using System.Xml.Schema;
 using Ical.Net;
 using Microsoft.Azure.Functions.Worker;
-using Microsoft.Azure.Functions.Worker.Extensions.Abstractions;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 
 // #r "System.Web.HttpUtility.dll"; System.Web.HttpUtility.UrlEncode("")
-// http://localhost:7134/api/One?url=https%3a%2f%2fcongresssquarepark.org%2fevents%2f%3fical%3d1&town=Portland&source=iCalAsCSV&location=Congress Square Park&format=html
-// http://localhost:7134/api/One?url=https%3a%2f%2fcongresssquarepark.org%2fevents%2f%3fical%3d1&town=Portland&source=iCalAsCSV&location=Congress Square Park&format=csv
+// http://localhost:7134/api/GetOne?url=https%3a%2f%2fcongresssquarepark.org%2fevents%2f%3fical%3d1&town=Portland&source=iCalAsCSV&location=Congress Square Park&format=html
+// http://localhost:7134/api/GetOne?url=https%3a%2f%2fcongresssquarepark.org%2fevents%2f%3fical%3d1&town=Portland&source=iCalAsCSV&location=Congress Square Park&format=csv
 
 namespace iCalProcessor
 {
@@ -24,8 +22,8 @@ namespace iCalProcessor
 		}
 
 		// parameters: url, format, town, location?
-		[Function("One")]
-		public async Task<HttpResponseData> One([HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req)
+		[Function("GetOne")]
+		public async Task<HttpResponseData> GetOne([HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req)
 		{
 			try
 			{
@@ -64,7 +62,7 @@ namespace iCalProcessor
 		}
 
 		[Function("GetMany")]
-		public async Task<HttpResponseData> Many([HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req)
+		public async Task<HttpResponseData> GetMany([HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req)
 		{
 			try
 			{
@@ -93,6 +91,7 @@ namespace iCalProcessor
 			}
 		}
 
+		// Usually doesn't have any location
 		private async Task<string> CongressSquarePark(ResponseFormat format)
 		{
 			var fetched = await Fetch("https://congresssquarepark.org/events/?ical=1");
@@ -110,6 +109,7 @@ namespace iCalProcessor
 			return formatted;
 		}
 
+		// Sometimes has "ME" or null for location
 		private async Task<string> ScarboroughLandTrust(ResponseFormat format)
 		{
 			var fetched = await Fetch("https://scarboroughlandtrust.org/events/?ical=1");
@@ -134,6 +134,7 @@ namespace iCalProcessor
 			return formatted;
 		}
 
+		// Has full addresses for location
 		private async Task<string> DiscoverDowntownWestbrook(ResponseFormat format)
 		{
 			var fetched = await Fetch("https://www.downtownwestbrook.com/calendars/list/?ical=1");
@@ -170,6 +171,7 @@ namespace iCalProcessor
 			return formatted;
 		}
 
+		// Remove the "FCL Closed" events. Location is usually what room it's in
 		private async Task<string> FreeportLibrary(ResponseFormat format)
 		{
 			var fetched = await Fetch("https://freeportmaine.libcal.com/ical_subscribe.php?src=p&cid=12960");
@@ -182,7 +184,7 @@ namespace iCalProcessor
 
 			foreach (var e in calendar.Events)
 			{
-				e.Location += ", Freeport Library";
+				e.Location = "Library, Freeport";
 			}
 
 			var formatted = format == ResponseFormat.csv
@@ -250,6 +252,7 @@ namespace iCalProcessor
 			return text?.Substring(0, Math.Min(text.Length, length)) + '…';
 		}
 
+		// TODO put day name if multiple days?
 		private static string FormatTimeSpan(DateTime start, DateTime end)
 		{
 			string result = start.Minute == 0
@@ -266,7 +269,7 @@ namespace iCalProcessor
 					? end.ToString("-h tt")
 					: end.ToString("-h:mm tt");
 
-			// TODO special case for all-day
+			// special case for "all-day"
 			// 12 AM-11:59 PM
 			if (result == "12 AM-11:59 PM") result = "all day";
 			if (result == "12-12 AM") result = "all day";
