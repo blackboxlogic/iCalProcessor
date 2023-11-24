@@ -75,7 +75,7 @@ namespace iCalProcessor
 					BikeMaine(format),
 					FreeportLibrary(format)};
 				await Task.WhenAll(formatters);
-				var formatted = string.Join(Environment.NewLine, formatters.Select(task => task.Result));
+				var formatted = string.Concat(formatters.Select(task => task.Result));
 
 				var response = req.CreateResponse(HttpStatusCode.OK);
 				response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
@@ -97,6 +97,8 @@ namespace iCalProcessor
 			var fetched = await Fetch("https://congresssquarepark.org/events/?ical=1");
 			var calendar = Calendar.Load(fetched);
 
+			if (calendar == null) return "";
+
 			foreach (var e in calendar.Events)
 			{
 				e.Location = "Congress Square Park, Portland";
@@ -114,6 +116,8 @@ namespace iCalProcessor
 		{
 			var fetched = await Fetch("https://scarboroughlandtrust.org/events/?ical=1");
 			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return "";
 
 			foreach (var e in calendar.Events)
 			{
@@ -140,6 +144,8 @@ namespace iCalProcessor
 			var fetched = await Fetch("https://www.downtownwestbrook.com/calendars/list/?ical=1");
 			var calendar = Calendar.Load(fetched);
 
+			if (calendar == null) return "";
+
 			foreach (var e in calendar.Events)
 			{
 				if (e.Location == null)
@@ -164,6 +170,8 @@ namespace iCalProcessor
 			var fetched = await Fetch("https://www.bikemaine.org/events/month/?ical=1");
 			var calendar = Calendar.Load(fetched);
 
+			if (calendar == null) return "";
+
 			var formatted = format == ResponseFormat.csv
 				? FormatICalCSV(calendar)
 				: FormatICalHTML(calendar);
@@ -176,6 +184,8 @@ namespace iCalProcessor
 		{
 			var fetched = await Fetch("https://freeportmaine.libcal.com/ical_subscribe.php?src=p&cid=12960");
 			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return "";
 
 			foreach (var closed in calendar.Events.Where(e => e.Summary == "FCL Closed").ToArray())
 			{
@@ -210,7 +220,7 @@ namespace iCalProcessor
 			var pretty = string.Join(Environment.NewLine,
 				calendar.Events.Select(e => $"{e.Start.Date:yyyy-MM-dd}, <a href=\"{e.Url}\">{EscapeTextForHTML(e.Summary)}<\\a>, {FormatTimeSpan(e.Start.Value, e.End.Value)}, {EscapeTextForHTML(e.Location)}"));
 
-			return pretty;
+			return pretty + Environment.NewLine;
 		}
 
 		//1) date
@@ -231,7 +241,7 @@ namespace iCalProcessor
 					EscapeTextForCSV(town ?? "unknown town"),
 					EscapeTextForCSV(e.Url.ToString()))));
 
-			return csv;
+			return csv + Environment.NewLine;
 		}
 
 		private static string EscapeTextForCSV(string text)
