@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Ical.Net;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
@@ -12,7 +13,7 @@ namespace iCalProcessor
 {
 	public class iCal
 	{
-		private enum ResponseFormat { csv, html }
+		private enum ResponseFormat { csv, html, json }
 
 		private readonly ILogger _logger;
 
@@ -27,28 +28,23 @@ namespace iCalProcessor
 		{
 			try
 			{
-				// TODO get query params into function params
 				var parameters = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
 				var format = Enum.Parse<ResponseFormat>(parameters["format"] ?? "csv");
 				var fetched = await Fetch(parameters["url"] ?? throw new ArgumentNullException("URL parameter is required"));
 				var calendar = Calendar.Load(fetched);
 
-				foreach (var e in calendar.Events)
-				{
-					e.Location = parameters["location"] ?? e.Location ?? "unknown location";
-
-					if (parameters["town"] != null)
-					{
-						e.Location += ", " + parameters["town"];
-					}
-				}
-
-				var formatted = format == ResponseFormat.csv
-					? FormatICalCSV(calendar, parameters["town"])
-					: FormatICalHTML(calendar);
+				var events = calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = parameters["town"] }).ToArray();
+				var formatted = FormatICal(events, format);
 
 				var response = req.CreateResponse(HttpStatusCode.OK);
-				response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
+
+				if (format == ResponseFormat.csv)
+					response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
+				if (format == ResponseFormat.json)
+					response.Headers.Add("Content-Type", "application/json; charset=utf-8");
+				if (format == ResponseFormat.html)
+					response.Headers.Add("Content-Type", "text/html; charset=utf-8");
+
 				await response.WriteStringAsync(formatted);
 
 				return response;
@@ -69,16 +65,24 @@ namespace iCalProcessor
 				var parameters = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
 				var format = Enum.Parse<ResponseFormat>(parameters["format"] ?? "csv");
 
-				var formatters = new[] { CongressSquarePark(format),
-					ScarboroughLandTrust(format),
-					DiscoverDowntownWestbrook(format),
-					BikeMaine(format),
-					FreeportLibrary(format)};
-				await Task.WhenAll(formatters);
-				var formatted = string.Concat(formatters.Select(task => task.Result));
+				var fetchers = new[] { CongressSquarePark(),
+					ScarboroughLandTrust(),
+					DiscoverDowntownWestbrook(),
+					BikeMaine(),
+					FreeportLibrary()};
+				await Task.WhenAll(fetchers);
+				var events = fetchers.SelectMany(task => task.Result).ToArray();
+				var formatted = FormatICal(events, format);
 
 				var response = req.CreateResponse(HttpStatusCode.OK);
-				response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
+
+				if(format == ResponseFormat.csv)
+					response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
+				if (format == ResponseFormat.json)
+					response.Headers.Add("Content-Type", "application/json; charset=utf-8");
+				if (format == ResponseFormat.html)
+					response.Headers.Add("Content-Type", "text/html; charset=utf-8");
+					
 				await response.WriteStringAsync(formatted);
 
 				return response;
@@ -92,32 +96,28 @@ namespace iCalProcessor
 		}
 
 		// Usually doesn't have any location
-		private async Task<string> CongressSquarePark(ResponseFormat format)
+		private async Task<Event[]> CongressSquarePark()
 		{
 			var fetched = await Fetch("https://congresssquarepark.org/events/?ical=1");
 			var calendar = Calendar.Load(fetched);
 
-			if (calendar == null) return "";
+			if (calendar == null) return new Event[0];
 
 			foreach (var e in calendar.Events)
 			{
 				e.Location = "Congress Square Park, Portland";
 			}
 
-			var formatted = format == ResponseFormat.csv
-				? FormatICalCSV(calendar, "Portland")
-				: FormatICalHTML(calendar);
-
-			return formatted;
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Portland" }).ToArray();
 		}
 
 		// Sometimes has "ME" or null for location
-		private async Task<string> ScarboroughLandTrust(ResponseFormat format)
+		private async Task<Event[]> ScarboroughLandTrust()
 		{
 			var fetched = await Fetch("https://scarboroughlandtrust.org/events/?ical=1");
 			var calendar = Calendar.Load(fetched);
 
-			if (calendar == null) return "";
+			if (calendar == null) return new Event[0];
 
 			foreach (var e in calendar.Events)
 			{
@@ -131,20 +131,16 @@ namespace iCalProcessor
 				}
 			}
 
-			var formatted = format == ResponseFormat.csv
-				? FormatICalCSV(calendar, "Scarborough")
-				: FormatICalHTML(calendar);
-
-			return formatted;
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Scarborough" }).ToArray();
 		}
 
 		// Has full addresses for location
-		private async Task<string> DiscoverDowntownWestbrook(ResponseFormat format)
+		private async Task<Event[]> DiscoverDowntownWestbrook()
 		{
 			var fetched = await Fetch("https://www.downtownwestbrook.com/calendars/list/?ical=1");
 			var calendar = Calendar.Load(fetched);
 
-			if (calendar == null) return "";
+			if (calendar == null) return new Event[0];
 
 			foreach (var e in calendar.Events)
 			{
@@ -158,34 +154,26 @@ namespace iCalProcessor
 				}
 			}
 
-			var formatted = format == ResponseFormat.csv
-				? FormatICalCSV(calendar, "Westbrook")
-				: FormatICalHTML(calendar);
-
-			return formatted;
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Westbrook" }).ToArray();
 		}
 
-		private async Task<string> BikeMaine(ResponseFormat format)
+		private async Task<Event[]> BikeMaine()
 		{
 			var fetched = await Fetch("https://www.bikemaine.org/events/month/?ical=1");
 			var calendar = Calendar.Load(fetched);
 
-			if (calendar == null) return "";
+			if (calendar == null) return new Event[0];
 
-			var formatted = format == ResponseFormat.csv
-				? FormatICalCSV(calendar)
-				: FormatICalHTML(calendar);
-
-			return formatted;
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location}).ToArray(); ;
 		}
 
 		// Remove the "FCL Closed" events. Location is usually what room it's in
-		private async Task<string> FreeportLibrary(ResponseFormat format)
+		private async Task<Event[]> FreeportLibrary()
 		{
 			var fetched = await Fetch("https://freeportmaine.libcal.com/ical_subscribe.php?src=p&cid=12960");
 			var calendar = Calendar.Load(fetched);
 
-			if (calendar == null) return "";
+			if (calendar == null) return new Event[0];
 
 			foreach (var closed in calendar.Events.Where(e => e.Summary == "FCL Closed").ToArray())
 			{
@@ -197,11 +185,7 @@ namespace iCalProcessor
 				e.Location = "Library, Freeport";
 			}
 
-			var formatted = format == ResponseFormat.csv
-				? FormatICalCSV(calendar, "Freeport")
-				: FormatICalHTML(calendar);
-
-			return formatted;
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Freeport" }).ToArray();
 		}
 
 		private static async Task<string> Fetch(string url)
@@ -214,11 +198,27 @@ namespace iCalProcessor
 			}
 		}
 
-		public static string FormatICalHTML(Calendar calendar)
+		private static string FormatICal(Event[] events, ResponseFormat format)
 		{
+			return format == ResponseFormat.csv
+				? FormatICalCSV(events)
+				: format == ResponseFormat.json
+					? FormatICalJSON(events)
+					: FormatICalHTML(events);
+		}
+
+		public static string FormatICalJSON(Event[] events)
+		{
+			return JsonSerializer.Serialize(events);
+		}
+
+		public static string FormatICalHTML(Event[] events)
+		{
+			//StringBuilder result = new StringBuilder();
+
 			// title=\"{/*EscapeTextForHTML(ElideText(e.Description, 100))}\"
 			var pretty = string.Join(Environment.NewLine,
-				calendar.Events.Select(e => $"{e.Start.Date:yyyy-MM-dd}, <a href=\"{e.Url}\">{EscapeTextForHTML(e.Summary)}<\\a>, {FormatTimeSpan(e.Start.Value, e.End.Value)}, {EscapeTextForHTML(e.Location)}"));
+				events.Select(e => $"{e.Start.Date:yyyy-MM-dd}, <a href=\"{e.Url}\">{EscapeTextForHTML(e.Summary)}<\\a>, {FormatTimeSpan(e.Start, e.End)}, {EscapeTextForHTML(e.Location)}"));
 
 			return pretty + Environment.NewLine;
 		}
@@ -229,16 +229,16 @@ namespace iCalProcessor
 		//4) location
 		//5) town
 		//6) link
-		public static string FormatICalCSV(Calendar calendar, string? town = null)
+		public static string FormatICalCSV(Event[] events)
 		{
 			var csv = string.Join(Environment.NewLine,
-				calendar.Events.Select(e =>
+				events.Select(e =>
 				string.Join(',',
 					e.Start.Date.ToString("MM-dd-yyyy"),
 					EscapeTextForCSV(e.Summary),
-					FormatTimeSpan(e.Start.Value, e.End.Value),
+					FormatTimeSpan(e.Start, e.End),
 					EscapeTextForCSV(e.Location),
-					EscapeTextForCSV(town ?? "unknown town"),
+					EscapeTextForCSV(e.Town ?? "unknown town"),
 					EscapeTextForCSV(e.Url.ToString()))));
 
 			return csv + Environment.NewLine;
@@ -285,6 +285,18 @@ namespace iCalProcessor
 			if (result == "12-12 AM") result = "all day";
 
 			return result;
+		}
+
+		public class Event
+		{
+			public DateTime Start { get; set; }
+			public DateTime End { get; set; }
+			public string Summary { get; set; }
+			//public string? Description { get; set; }
+			public string Location { get; set; } // like address
+			public string? Town { get; set; }
+			public Uri Url { get; set; }
+			public string TimeSpanPretty => FormatTimeSpan(Start, End);
 		}
 	}
 }
