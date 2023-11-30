@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using Ical.Net;
 using Microsoft.Azure.Functions.Worker;
@@ -63,13 +64,19 @@ namespace iCalProcessor
 			try
 			{
 				var parameters = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
-				var format = Enum.Parse<ResponseFormat>(parameters["format"] ?? "csv");
+				var format = Enum.Parse<ResponseFormat>(parameters["format"] ?? "html");
 
 				var fetchers = new[] { CongressSquarePark(),
 					ScarboroughLandTrust(),
 					DiscoverDowntownWestbrook(),
 					BikeMaine(),
-					FreeportLibrary()};
+					FreeportLibrary(),
+					UniversitySouthernMaine(),
+					SEDCO(),
+					WoodfordsCorner(),
+					VisitPortland(),
+					MaineMaritimeMuseum(),
+					GravesLibrary()};
 				await Task.WhenAll(fetchers);
 				var events = fetchers.SelectMany(task => task.Result).ToArray();
 				var formatted = FormatICal(events, format);
@@ -93,6 +100,89 @@ namespace iCalProcessor
 				await response.WriteStringAsync(e.ToString());
 				return response;
 			}
+		}
+
+		//https://www.googleapis.com/calendar/v3/calendars/x3d96ac1509248ba165d75df7e03c0e57a2afb2be15b0af5ae856e88ff90fe9e0b8/events
+		//https://stackoverflow.com/questions/21539375/get-json-from-a-public-google-calendar
+		//https://bridgtonlibrary.org/calendar/
+
+		private async Task<Event[]> GravesLibrary()
+		{
+			var fetched = await Fetch("https://graveslibrary.org/?post_type=tribe_events&ical=1&eventDisplay=list");
+			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return new Event[0];
+
+			foreach (var e in calendar.Events)
+			{
+				e.Location = "Graves Library, Kennebunkport";
+			}
+
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Kennebunkport" }).ToArray();
+		}
+
+		private async Task<Event[]> MaineMaritimeMuseum()
+		{
+			var fetched = await Fetch("https://www.mainemaritimemuseum.org/?post_type=tribe_events&ical=1&eventDisplay=list");
+			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return new Event[0];
+
+			foreach (var e in calendar.Events)
+			{
+				e.Location = "Maine Maritime Museum, Bath";
+			}
+
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Bath" }).ToArray();
+		}
+
+		// has none?
+		private async Task<Event[]> VisitPortland()
+		{
+			var fetched = await Fetch("https://www.visitportland.com/visit/things-to-do/event-calendar/?ical=1");
+			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return new Event[0];
+
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Portland" }).ToArray();
+		}
+
+		//https://woodfordscorner.org/community-calendar
+		private async Task<Event[]> WoodfordsCorner()
+		{
+			var fetched = await Fetch("https://tockify.com/api/feeds/ics/fwc.community");
+			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return new Event[0];
+
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Portland" }).ToArray();
+		}
+
+		//https://sedcomaine.com/scarborough-community-calendar/
+		private async Task<Event[]> SEDCO()
+		{
+			var fetched = await Fetch("https://tockify.com/api/feeds/ics/scarboroughcc");
+			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return new Event[0];
+
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Scarborough" }).ToArray();
+		}
+		
+
+		private async Task<Event[]> UniversitySouthernMaine()
+		{
+			var fetched = await Fetch("https://usm.maine.edu/calendar-of-events?ical=1");
+			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return new Event[0];
+
+			foreach (var e in calendar.Events)
+			{
+				e.Location = "USM, Portland";
+			}
+
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Portland" }).ToArray();
 		}
 
 		// Usually doesn't have any location
@@ -175,7 +265,9 @@ namespace iCalProcessor
 
 			if (calendar == null) return new Event[0];
 
-			foreach (var closed in calendar.Events.Where(e => e.Summary == "FCL Closed").ToArray())
+			// Spelling is hard
+			foreach (var closed in calendar.Events.Where(e => e.Summary == "FCL Closed"
+				|| e.Summary.Contains("CANCEL")).ToArray())
 			{
 				calendar.Events.Remove(closed);
 			}
@@ -214,13 +306,66 @@ namespace iCalProcessor
 
 		public static string FormatICalHTML(Event[] events)
 		{
-			//StringBuilder result = new StringBuilder();
+			StringBuilder result = new StringBuilder();
+			result.AppendLine("<html><head></head><body>");
 
-			// title=\"{/*EscapeTextForHTML(ElideText(e.Description, 100))}\"
-			var pretty = string.Join(Environment.NewLine,
-				events.Select(e => $"{e.Start.Date:yyyy-MM-dd}, <a href=\"{e.Url}\">{EscapeTextForHTML(e.Summary)}<\\a>, {FormatTimeSpan(e.Start, e.End)}, {EscapeTextForHTML(e.Location)}"));
+			result.AppendLine(@" <label for=""townSelect"">Filter by town:</label>
 
-			return pretty + Environment.NewLine;
+<select name=""townSelect"" id=""townSelect"">
+  <option value=""All"" selected>All</option>
+  <option value=""Portland"">Portland</option>
+  <option value=""Freeport"">Freeport</option>
+  <option value=""Scarborough"">Scarborough</option>
+  <option value=""Westbrook"">Westbrook</option>
+</select> ");
+
+			result.AppendLine("<div id=\"eventList\">");
+
+			var byDay = events.Where(e => e.Start > DateTime.Now.Date && e.Start < DateTime.Now.Date.AddDays(7)).OrderBy(e => e.Start).GroupBy(e => e.Start.Date);
+
+			foreach (var day in byDay)
+			{
+				result.AppendLine($"<h4>{day.Key.ToString("dddd, MMMM dd")}</h1>");
+
+				result.AppendLine(string.Join(Environment.NewLine,
+					day.Select(e => $"<div data-town=\"{e.Town}\"><a href=\"{e.Url}\">{EscapeTextForHTML(ElideText(e.Summary, 55))}</a>, {FormatTimeSpan(e.Start, e.End)}, {EscapeTextForHTML(e.Location)}</div>")));
+
+			}
+
+			result.AppendLine("</div>");
+
+			result.AppendLine(@"
+<script>
+
+function Filter() {
+  var input, filter, ul, li, town, i, txtValue;
+  input = document.getElementById('townSelect');
+  filter = input.value.toUpperCase();
+
+  ul = document.getElementById(""eventList"");
+  li = ul.getElementsByTagName('div');
+
+  // Loop through all list items, and hide those who don't match the search query
+  for (i = 0; i < li.length; i++) {
+    town = li[i].getAttribute(""data-town"");
+    if (town.toUpperCase() == filter.toUpperCase() || filter == ""ALL"") {
+      li[i].style.display = """";
+    } else {
+      li[i].style.display = ""none"";
+    }
+  }
+}
+
+var mySelect = document.getElementById(""townSelect"");
+mySelect.addEventListener(""change"", Filter);
+Filter();
+
+</script>
+");
+
+			result.AppendLine("</body>");
+
+			return result.ToString();
 		}
 
 		//1) date
@@ -241,7 +386,7 @@ namespace iCalProcessor
 					EscapeTextForCSV(e.Town ?? "unknown town"),
 					EscapeTextForCSV(e.Url.ToString()))));
 
-			return csv + Environment.NewLine;
+			return csv;
 		}
 
 		private static string EscapeTextForCSV(string text)
@@ -297,6 +442,8 @@ namespace iCalProcessor
 			public string? Town { get; set; }
 			public Uri Url { get; set; }
 			public string TimeSpanPretty => FormatTimeSpan(Start, End);
+			public string Price { get; set; }
+			public string AgeRange { get; set; }
 		}
 	}
 }
