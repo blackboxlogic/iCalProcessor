@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Ical.Net;
@@ -21,6 +22,34 @@ namespace iCalProcessor
 		public iCal(ILoggerFactory loggerFactory)
 		{
 			_logger = loggerFactory.CreateLogger<iCal>();
+		}
+
+		[Function("CorsProxy")]
+		public async Task<HttpResponseData> CorsProxy([HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req)
+		{
+			var parameters = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
+			var url = new Uri(parameters["url"]);
+			//if (url.Host != "calendar.google.com")
+			//{
+				//throw new ArgumentException("invalid url parameter");
+			//}
+
+			var fetched = await FetchWithHeaders(url.ToString());
+			var response = req.CreateResponse(HttpStatusCode.OK);
+			await response.WriteStringAsync(fetched.content);
+
+			response.Headers.Clear();
+
+			foreach (var header in fetched.headers)
+			{
+				if(!header.Key.StartsWith("Cross-Origin") && header.Key != "Transfer-Encoding")
+					response.Headers.Add(header.Key, header.Value);
+			}
+
+			response.Headers.Remove("Access-Control-Allow-Origin");
+			response.Headers.Add("Access-Control-Allow-Origin", "*");
+
+			return response;
 		}
 
 		// parameters: url, format, town, location?
@@ -76,20 +105,21 @@ namespace iCalProcessor
 					WoodfordsCorner(),
 					VisitPortland(),
 					MaineMaritimeMuseum(),
-					GravesLibrary()};
+					GravesLibrary(),
+					DEFFA()};
 				await Task.WhenAll(fetchers);
 				var events = fetchers.SelectMany(task => task.Result).ToArray();
 				var formatted = FormatICal(events, format);
 
 				var response = req.CreateResponse(HttpStatusCode.OK);
 
-				if(format == ResponseFormat.csv)
+				if (format == ResponseFormat.csv)
 					response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
 				if (format == ResponseFormat.json)
 					response.Headers.Add("Content-Type", "application/json; charset=utf-8");
 				if (format == ResponseFormat.html)
 					response.Headers.Add("Content-Type", "text/html; charset=utf-8");
-					
+
 				await response.WriteStringAsync(formatted);
 
 				return response;
@@ -105,6 +135,16 @@ namespace iCalProcessor
 		//https://www.googleapis.com/calendar/v3/calendars/x3d96ac1509248ba165d75df7e03c0e57a2afb2be15b0af5ae856e88ff90fe9e0b8/events
 		//https://stackoverflow.com/questions/21539375/get-json-from-a-public-google-calendar
 		//https://bridgtonlibrary.org/calendar/
+
+		private async Task<Event[]> DEFFA()
+		{
+			var fetched = await Fetch("https://deffa.org/?post_type=tribe_events&ical=1&eventDisplay=list");
+			var calendar = Calendar.Load(fetched);
+
+			if (calendar == null) return new Event[0];
+
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Kennebunkport" }).ToArray();
+		}
 
 		private async Task<Event[]> GravesLibrary()
 		{
@@ -168,7 +208,6 @@ namespace iCalProcessor
 
 			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location, Town = "Scarborough" }).ToArray();
 		}
-		
 
 		private async Task<Event[]> UniversitySouthernMaine()
 		{
@@ -254,7 +293,7 @@ namespace iCalProcessor
 
 			if (calendar == null) return new Event[0];
 
-			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location}).ToArray(); ;
+			return calendar.Events.Select(e => new Event() { Start = e.Start.Value, End = e.End.Value, Summary = e.Summary, Url = e.Url, Location = e.Location }).ToArray();
 		}
 
 		// Remove the "FCL Closed" events. Location is usually what room it's in
@@ -287,6 +326,16 @@ namespace iCalProcessor
 			using (HttpContent content = response.Content)
 			{
 				return await content.ReadAsStringAsync();
+			}
+		}
+
+		private static async Task<(string content, HttpResponseHeaders headers)> FetchWithHeaders(string url)
+		{
+			using (HttpClient client = new HttpClient())
+			using (HttpResponseMessage response = await client.GetAsync(url))
+			using (HttpContent content = response.Content)
+			{
+				return (await content.ReadAsStringAsync(), response.Headers);
 			}
 		}
 
@@ -333,7 +382,7 @@ namespace iCalProcessor
 			}
 
 			result.AppendLine("</div>");
-
+			// https://www.w3schools.com/howto/howto_js_filter_lists.asp
 			result.AppendLine(@"
 <script>
 
